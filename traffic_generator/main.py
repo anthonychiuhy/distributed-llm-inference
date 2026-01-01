@@ -1,10 +1,10 @@
 import os
-import time
+from time import perf_counter
 import json
 # import argparse
 import asyncio
 
-import httpx
+import aiohttp
 import numpy as np
 import pandas as pd
 
@@ -183,49 +183,79 @@ class MetricCollector:
 
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
-    def __init__(self, data: list, schedule: pd.DataFrame, llm: ChatOllama):
+    def __init__(self, data: list, schedule: pd.DataFrame, config: dict):
         self.queries = Query(inputs=data, schedule=schedule)
-        self.llm = llm
+        self.config = config
 
         print(self.queries.schedule)
     
-    async def inference_call(self, prompt, query_id, sleep_time, start_time):
-        # Single inference call
-        await asyncio.sleep(sleep_time)
-        print(f"[START] ID: {query_id}, Start: {time.perf_counter() - start_time:.1f}")
-        start = time.perf_counter()
+    # async def inference_call(self, prompt, query_id, sleep_time, start_time):
+    #     # Single inference call
+    #     await asyncio.sleep(sleep_time)
+    #     print(f"[START] ID: {query_id}, Start: {perf_counter() - start_time:.1f}")
+    #     start = perf_counter()
+    #     try:
+    #         await self.llm.ainvoke(prompt)
+    #     except httpx.RequestError as exc:
+    #         print(f"An error occurred while requesting {repr(exc.request.url)}.")
+    #     print(f"[END] ID: {query_id}, End: {perf_counter() - start_time:.1f}, turnaround: {perf_counter() - start:.1f}")
+
+    @staticmethod
+    async def post_request(session, url, payload):
         try:
-            await self.llm.ainvoke(prompt)
-        except httpx.RequestError as exc:
-            print(f"An error occurred while requesting {repr(exc.request.url)}.")
-        print(f"[END] ID: {query_id}, End: {time.perf_counter() - start_time:.1f}, turnaround: {time.perf_counter() - start:.1f}")
+            async with session.post(url, json=payload) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+        except aiohttp.ClientResponseError as e:
+            print(f"ClientResponseError: {e}")
+        except aiohttp.ClientConnectionError as e:
+            print(f"ClientConnectionError: {e}")
+
+    async def inference_call(self, session, prompt, sleep_time, query_id, start_time):
+        # Single inference call
+        payload = {
+            "model": self.config['model'],
+            "prompt": prompt,
+            "temperature": self.config['temperature'],
+            "max_tokens": self.config['max_tokens'],
+            "stream": False
+        }
+        url = self.config['url']
+
+        await asyncio.sleep(sleep_time)
+        start = perf_counter()
+        print(f"[START] ID: {query_id}, Start: {perf_counter() - start_time:.1f}")
+        await self.post_request(session, url, payload)
+        print(f"[END] ID: {query_id}, End: {perf_counter() - start_time:.1f}, turnaround: {perf_counter() - start:.1f}")
 
     async def issue_queries(self):
         # Multiple concurrent inference call
-        task_list = []
-        start_time = time.perf_counter()
-        for _ in range(len(self.queries)):
-            prompt, in_num, out_num, query_id, sleep_time = self.queries.get_query()
-            task_list.append(self.inference_call(prompt, query_id, sleep_time, start_time))
-        await asyncio.gather(*task_list)
+        async with aiohttp.ClientSession() as session:
+            start_time = perf_counter()
+            task_list = []
+            for _ in range(len(self.queries)):
+                prompt, in_num, out_num, query_id, sleep_time = self.queries.get_query()
+                task_list.append(self.inference_call(session, prompt, sleep_time, query_id, start_time))
+            await asyncio.gather(*task_list)
 
     def start_profile(self):
         asyncio.run(self.issue_queries())
+
 
 config = {
     'trace_path': "../data/trace1.csv",
     'data_path': "../data/conversations.json",
     'max_trace': 100,
-    'host': 'http://10.215.130.20:11434', # OR 172.25.149.93
+    'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
     'no_proxy': "10.215.130.20",
     'model': 'mistral',
     'temperature': 0.7,
-    'max_token': 200
+    'max_tokens': 200,
+    'save_log': False
 }
 
-
 if __name__ == "__main__":
-    os.environ["NO_PROXY"] = config['no_proxy']
+    # os.environ["NO_PROXY"] = config['no_proxy']
 
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
 
@@ -239,12 +269,12 @@ if __name__ == "__main__":
     # users = [user1, user2, user3, user4, user5]
     # schedule = Scheduler().get_schedule_from_users(users=users)
 
-    llm = ChatOllama(
-        model=config['model'],
-        base_url=config['host'],
-        temperature=config['temperature'],
-        num_predict=config['max_token']
-    )
+    # llm = ChatOllama(
+    #     model=config['model'],
+    #     base_url=config['host'],
+    #     temperature=config['temperature'],
+    #     num_predict=config['max_token']
+    # )
 
-    generator = TrafficGenerator(data=data, schedule=schedule, llm=llm)
+    generator = TrafficGenerator(data=data, schedule=schedule, config=config)
     generator.start_profile()
