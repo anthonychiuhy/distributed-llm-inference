@@ -279,7 +279,7 @@ wheels = [
 ]
 
 [[package]]
-name = "distributed-llm"
+name = "distributed-llm-inference"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

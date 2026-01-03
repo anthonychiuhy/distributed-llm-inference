@@ -3,12 +3,11 @@ from time import perf_counter
 import json
 # import argparse
 import asyncio
-
 import aiohttp
 import numpy as np
 import pandas as pd
 
-from langchain_ollama import ChatOllama
+# from langchain_ollama import ChatOllama
 
 
 class SteadyUser:
@@ -56,7 +55,15 @@ class Scheduler:
         self.config = config
 
     def get_schedule_from_trace(self, trace_path: str, max_trace: int) -> pd.DataFrame:
-        return pd.read_csv(trace_path, nrows=max_trace)
+        return pd.read_csv(
+            trace_path,
+            nrows=max_trace,
+            dtype={
+                "Timestamp": float,
+                "Request tokens": int,
+                "Response tokens": int
+            }
+        )
 
     def get_schedule_from_users(self, users: list[SteadyUser | BurstUser]) -> pd.DataFrame:
         REQUEST_TOKENS = 500
@@ -80,10 +87,10 @@ class Query:
     def __init__(self, inputs: list, schedule: pd.DataFrame):
         self.inputs = inputs
         self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
-        self.query_id = 0
+        self.query_id = -1
         self.query_time = 0
-        self.max_prompt_len = 1024
-        self.max_gen_len = 1024
+        self.max_prompt_len = MAX_PROMPT_LEN
+        self.max_gen_len = MAX_GEN_LEN
         self.prefill_idx = self.get_prefill_idx()
 
     @staticmethod
@@ -148,32 +155,71 @@ class Query:
 
     def get_query(self):
         # Use the trace
-        self.query_time = self.schedule.at[self.query_id, 'Timestamp']
-
-        sampled_prompt_len = self.schedule.at[self.query_id, 'Request tokens']
-        sampled_prompt_len = min(sampled_prompt_len, self.max_prompt_len)
-        sampled_output_len = self.schedule.at[self.query_id, 'Response tokens']
-        sampled_output_len = min(sampled_output_len, self.max_gen_len)
-
-        prompt_len = self.inputs[self.prefill_idx[sampled_prompt_len][sampled_output_len]][1]
-        output_len = self.inputs[self.prefill_idx[sampled_prompt_len][sampled_output_len]][2]
-
         self.query_id += 1
 
+        self.query_time = self.schedule.at[self.query_id, 'Timestamp'].item()
+
+        sampled_prompt_len = self.schedule.at[self.query_id, 'Request tokens'].item()
+        sampled_prompt_len = min(sampled_prompt_len, self.max_prompt_len)
+        sampled_output_len = self.schedule.at[self.query_id, 'Response tokens'].item()
+        sampled_output_len = min(sampled_output_len, self.max_gen_len)
+
+        sampled = self.inputs[self.prefill_idx[sampled_prompt_len][sampled_output_len]]
+
         return [
-            self.inputs[self.prefill_idx[sampled_prompt_len][sampled_output_len]][0],
-            prompt_len,
-            output_len,
+            sampled[0], # prompt
+            sampled[1], # prompt input length
+            sampled[2], # prompr output length
             self.query_id,
             self.query_time
         ]
     
+    def reset(self):
+        self.query_id = -1
+        self.query_time = 0
+
     def __len__(self):
         return len(self.schedule)
 
 class MetricCollector:
-    def __init__(self, config):
-        self.config = config
+    def __init__(self):
+        self.trace_config = TraceConfig()
+        self.metrics = {}
+    
+    def save(self, path):
+        with open(path, 'w') as f:
+            json.dump(self.metrics, f)
+
+class TraceConfig(aiohttp.TraceConfig):
+    def __init__(self):
+        super().__init__()
+        self.on_request_start.append(self.on_request_start_callback)
+        self.on_request_end.append(self.on_request_end_callback)
+        self.on_request_exception.append(self.on_request_exception_callback)
+
+    async def on_request_start_callback(self, session, ctx, params):
+        # request start
+        logger = ctx.trace_request_ctx['logger']
+        query_id = ctx.trace_request_ctx['query_id']
+        request_start_time = perf_counter() - logger.session_start_timestamp
+
+        logger.metrics[query_id]['request_start_time'] = request_start_time
+
+        print(f"[START] ID: {query_id}, Start: {request_start_time:.1f}")
+
+    async def on_request_end_callback(self, session, ctx, params):
+        # response status line and headers received
+        logger = ctx.trace_request_ctx['logger']
+        query_id = ctx.trace_request_ctx['query_id']
+
+        logger.metrics[query_id]['response_headers_received_time'] = perf_counter() - logger.session_start_timestamp
+    
+    async def on_request_exception_callback(self, session, ctx, params):
+        # request exception raised
+        query_id = ctx.trace_request_ctx['query_id']
+        logger.metrics[query_id]['response_headers_received_time'] = None
+
+        print(f"[ERROR] ID: {query_id}, Request Exception")
 
 # sending token rate  = (number of tokens sent / ackknowledge time)
 # time to first token
@@ -183,75 +229,87 @@ class MetricCollector:
 
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
-    def __init__(self, data: list, schedule: pd.DataFrame, config: dict):
+    def __init__(self, data: list, schedule: pd.DataFrame, config: dict, logger: MetricCollector):
         self.queries = Query(inputs=data, schedule=schedule)
         self.config = config
+        self.logger = logger
 
         print(self.queries.schedule)
-    
-    # async def inference_call(self, prompt, query_id, sleep_time, start_time):
-    #     # Single inference call
-    #     await asyncio.sleep(sleep_time)
-    #     print(f"[START] ID: {query_id}, Start: {perf_counter() - start_time:.1f}")
-    #     start = perf_counter()
-    #     try:
-    #         await self.llm.ainvoke(prompt)
-    #     except httpx.RequestError as exc:
-    #         print(f"An error occurred while requesting {repr(exc.request.url)}.")
-    #     print(f"[END] ID: {query_id}, End: {perf_counter() - start_time:.1f}, turnaround: {perf_counter() - start:.1f}")
 
-    @staticmethod
-    async def post_request(session, url, payload):
-        try:
-            async with session.post(url, json=payload) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-        except aiohttp.ClientResponseError as e:
-            print(f"ClientResponseError: {e}")
-        except aiohttp.ClientConnectionError as e:
-            print(f"ClientConnectionError: {e}")
-
-    async def inference_call(self, session, prompt, sleep_time, query_id, start_time):
+    async def inference_call(self, session, prompt, sleep_time, query_id):
         # Single inference call
         payload = {
             "model": self.config['model'],
             "prompt": prompt,
             "temperature": self.config['temperature'],
             "max_tokens": self.config['max_tokens'],
-            "stream": False
+            "stream": STREAM
         }
         url = self.config['url']
+        trace_request_ctx = {'query_id':query_id, 'logger':self.logger}
+
+        success = False
+        response_end_time = None
+        first_token_arrive_time = None
 
         await asyncio.sleep(sleep_time)
-        start = perf_counter()
-        print(f"[START] ID: {query_id}, Start: {perf_counter() - start_time:.1f}")
-        await self.post_request(session, url, payload)
-        print(f"[END] ID: {query_id}, End: {perf_counter() - start_time:.1f}, turnaround: {perf_counter() - start:.1f}")
+        try:
+            async with session.post(url, json=payload, trace_request_ctx=trace_request_ctx) as resp:
+                resp.raise_for_status()
+                first = True
+                async for _ in resp.content:
+                    if first:
+                        first_token_arrive_time = perf_counter() - self.logger.session_start_timestamp
+                        first = False
+            success = True
+            response_end_time = perf_counter() - self.logger.session_start_timestamp
+
+            print(f"[END] ID: {query_id}, End: {response_end_time:.1f}, turnaround: {response_end_time - self.logger.metrics[query_id]['request_start_time']:.1f}")
+
+        except aiohttp.ClientResponseError as e:
+            print(f"ClientResponseError: {e}")
+        except aiohttp.ClientConnectionError as e:
+            print(f"ClientConnectionError: {e}")
+
+        self.logger.metrics[query_id]['first_token_arrive_time'] = first_token_arrive_time
+        self.logger.metrics[query_id]['response_end_time'] = response_end_time
+        self.logger.metrics[query_id]['scheduled_start_time'] = sleep_time
+        self.logger.metrics[query_id]['success'] = success
 
     async def issue_queries(self):
         # Multiple concurrent inference call
-        async with aiohttp.ClientSession() as session:
-            start_time = perf_counter()
+        async with aiohttp.ClientSession(trace_configs=[self.logger.trace_config]) as session:
             task_list = []
             for _ in range(len(self.queries)):
                 prompt, in_num, out_num, query_id, sleep_time = self.queries.get_query()
-                task_list.append(self.inference_call(session, prompt, sleep_time, query_id, start_time))
+                task_list.append(self.inference_call(session, prompt, sleep_time, query_id))
+                
+                self.logger.metrics[query_id] = {} # initialise
+                self.logger.metrics[query_id]['number_of_input_tokens'] = in_num
+            self.logger.session_start_timestamp = perf_counter()
             await asyncio.gather(*task_list)
 
     def start_profile(self):
+        self.queries.reset()
         asyncio.run(self.issue_queries())
 
 
+
+MAX_PROMPT_LEN = 1024
+MAX_GEN_LEN = 1024
+STREAM = True
+
 config = {
-    'trace_path': "../data/trace1.csv",
-    'data_path': "../data/conversations.json",
+    'trace_path': '../data/trace1.csv',
+    'data_path': '../data/conversations.json',
     'max_trace': 100,
     'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
-    'no_proxy': "10.215.130.20",
+    'no_proxy': '10.215.130.20',
     'model': 'mistral',
     'temperature': 0.7,
     'max_tokens': 200,
-    'save_log': False
+    'save_log': False,
+    'log_path': '../logs/log.json'
 }
 
 if __name__ == "__main__":
@@ -260,6 +318,8 @@ if __name__ == "__main__":
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
 
     schedule = Scheduler().get_schedule_from_trace(trace_path=config['trace_path'], max_trace=config['max_trace'])
+
+    logger = MetricCollector()
 
     # user1 = SteadyUser(name='u1', req_freq=1.0, duration=10.0, delay_start=0.0)
     # user2 = SteadyUser(name='u2', req_freq=1.0, duration=10.0, delay_start=0.3)
@@ -276,5 +336,8 @@ if __name__ == "__main__":
     #     num_predict=config['max_token']
     # )
 
-    generator = TrafficGenerator(data=data, schedule=schedule, config=config)
+    generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
     generator.start_profile()
+
+    print(logger.metrics)
+    logger.save(path=config['log_path'])
