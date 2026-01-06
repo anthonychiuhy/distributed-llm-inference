@@ -164,7 +164,7 @@ class Query:
         sampled_output_len = self.schedule.at[self.query_id, 'Response tokens'].item()
         sampled_output_len = min(sampled_output_len, self.max_gen_len)
 
-        sampled = self.inputs[self.prefill_idx[sampled_prompt_len][sampled_output_len]]
+        sampled = self.inputs[self.prefill_idx[sampled_prompt_len, sampled_output_len]]
 
         return [
             sampled[0], # prompt
@@ -308,7 +308,7 @@ config = {
     'model': 'mistral',
     'temperature': 0.7,
     'max_tokens': 200,
-    'save_log': False,
+    # 'save_log': False,
     'log_path': '../logs/log.json'
 }
 
