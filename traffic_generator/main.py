@@ -7,8 +7,6 @@ import aiohttp
 import numpy as np
 import pandas as pd
 
-# from langchain_ollama import ChatOllama
-
 
 class SteadyUser:
     def __init__(self, name: str, req_freq: float, duration: float, delay_start: float = 0.0):
@@ -240,7 +238,12 @@ class TrafficGenerator:
         # Single inference call
         payload = {
             "model": self.config['model'],
-            "prompt": prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
             "temperature": self.config['temperature'],
             "max_tokens": self.config['max_tokens'],
             "stream": STREAM
@@ -257,7 +260,7 @@ class TrafficGenerator:
             async with session.post(url, json=payload, trace_request_ctx=trace_request_ctx) as resp:
                 resp.raise_for_status()
                 first = True
-                async for _ in resp.content:
+                async for line in resp.content:
                     if first:
                         first_token_arrive_time = perf_counter() - self.logger.session_start_timestamp
                         first = False
@@ -302,12 +305,13 @@ STREAM = True
 config = {
     'trace_path': '../data/trace1.csv',
     'data_path': '../data/conversations.json',
-    'max_trace': 100,
-    'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
-    'no_proxy': '10.215.130.20',
-    'model': 'mistral',
+    'max_trace': 1000,
+    # 'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
+    'url': 'http://192.168.1.100:8000/v1/chat/completions',
+    # 'no_proxy': '10.215.130.20',
+    'model': 'google/gemma-3-1b-it',
     'temperature': 0.7,
-    'max_tokens': 200,
+    'max_tokens': 8192,
     # 'save_log': False,
     'log_path': '../logs/log.json'
 }
@@ -329,15 +333,8 @@ if __name__ == "__main__":
     # users = [user1, user2, user3, user4, user5]
     # schedule = Scheduler().get_schedule_from_users(users=users)
 
-    # llm = ChatOllama(
-    #     model=config['model'],
-    #     base_url=config['host'],
-    #     temperature=config['temperature'],
-    #     num_predict=config['max_token']
-    # )
-
     generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
     generator.start_profile()
 
-    print(logger.metrics)
+    # print(logger.metrics)
     logger.save(path=config['log_path'])
