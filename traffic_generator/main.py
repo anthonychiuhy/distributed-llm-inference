@@ -8,31 +8,31 @@ import numpy as np
 import pandas as pd
 
 
-class SteadyUser:
-    def __init__(self, name: str, req_freq: float, duration: float, delay_start: float = 0.0):
-        self.name = name
-        self.req_freq = req_freq
-        self.duration = duration
-        self.delay_start = delay_start
+# class SteadyUser:
+#     def __init__(self, name: str, req_freq: float, duration: float, delay_start: float = 0.0):
+#         self.name = name
+#         self.req_freq = req_freq
+#         self.duration = duration
+#         self.delay_start = delay_start
     
-    def get_timestamps(self) -> list[float]:
-        timestamps = []
-        interval = 1.0 / self.req_freq
-        t = 0.0
-        while t <= self.duration:
-            timestamps.append(t + self.delay_start)
-            t += interval
-        return timestamps
+#     def get_timestamps(self) -> list[float]:
+#         timestamps = []
+#         interval = 1.0 / self.req_freq
+#         t = 0.0
+#         while t <= self.duration:
+#             timestamps.append(t + self.delay_start)
+#             t += interval
+#         return timestamps
 
 
-class BurstUser:
-    def __init__(self, name: str, n_req: int, time: float):
-        self.name = name
-        self.n_req = n_req
-        self.time = time
+# class BurstUser:
+#     def __init__(self, name: str, n_req: int, time: float):
+#         self.name = name
+#         self.n_req = n_req
+#         self.time = time
     
-    def get_timestamps(self) -> list[float]:
-        return [self.time] * self.n_req
+#     def get_timestamps(self) -> list[float]:
+#         return [self.time] * self.n_req
 
 
 class DataLoader:
