@@ -8,32 +8,30 @@ import numpy as np
 import pandas as pd
 
 
-# class SteadyUser:
-#     def __init__(self, name: str, req_freq: float, duration: float, delay_start: float = 0.0):
-#         self.name = name
-#         self.req_freq = req_freq
-#         self.duration = duration
-#         self.delay_start = delay_start
+class SteadyUser:
+    def __init__(self, name: str, req_freq: float, duration: float, delay_start: float = 0.0):
+        self.name = name
+        self.req_freq = req_freq
+        self.duration = duration
+        self.delay_start = delay_start
     
-#     def get_timestamps(self) -> list[float]:
-#         timestamps = []
-#         interval = 1.0 / self.req_freq
-#         t = 0.0
-#         while t <= self.duration:
-#             timestamps.append(t + self.delay_start)
-#             t += interval
-#         return timestamps
+    def get_timestamps(self) -> list[float]:
+        timestamps = []
+        interval = 1.0 / self.req_freq
+        t = 0.0
+        while t <= self.duration:
+            timestamps.append(t + self.delay_start)
+            t += interval
+        return timestamps
 
-
-# class BurstUser:
-#     def __init__(self, name: str, n_req: int, time: float):
-#         self.name = name
-#         self.n_req = n_req
-#         self.time = time
+class BurstUser:
+    def __init__(self, name: str, n_req: int, time: float):
+        self.name = name
+        self.n_req = n_req
+        self.time = time
     
-#     def get_timestamps(self) -> list[float]:
-#         return [self.time] * self.n_req
-
+    def get_timestamps(self) -> list[float]:
+        return [self.time] * self.n_req
 
 class DataLoader:
     def __init__(self, config=None):
@@ -82,13 +80,13 @@ class Scheduler:
         return pd.concat(dfs).reset_index(drop=True)
 
 class Query:
-    def __init__(self, inputs: list, schedule: pd.DataFrame):
+    def __init__(self, inputs: list, schedule: pd.DataFrame, max_prefill_prompt_len: int = 5000, max_prefill_gen_len: int = 5000):
         self.inputs = inputs
         self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
         self.query_id = -1
         self.query_time = 0
-        self.max_prompt_len = MAX_PROMPT_LEN
-        self.max_gen_len = MAX_GEN_LEN
+        self.max_prefill_prompt_len = max_prefill_prompt_len
+        self.max_prefill_gen_len = max_prefill_gen_len
         self.prefill_idx = self.get_prefill_idx()
 
     @staticmethod
@@ -127,14 +125,15 @@ class Query:
                 arr[i] = arr[i + dist_to_right[i]]
 
     def get_prefill_idx(self):
-        prefill_idx = np.ones((self.max_prompt_len+1, self.max_gen_len+1), dtype=int) * (-1)
-        prompt_exist = np.zeros(self.max_prompt_len+1, dtype=bool)
+        prefill_idx = np.ones((self.max_prefill_prompt_len+1, self.max_prefill_gen_len+1), dtype=int) * (-1)
+        prompt_exist = np.zeros(self.max_prefill_prompt_len+1, dtype=bool)
 
+        print("prefill start")
         # prefill record
         for idx, data in enumerate(self.inputs):
             len_prompt = data[1]
             len_output = data[2]
-            if len_prompt <= self.max_prompt_len and len_output <= self.max_gen_len:
+            if len_prompt <= self.max_prefill_prompt_len and len_output <= self.max_prefill_gen_len:
                 prefill_idx[len_prompt, len_output] = idx
                 prompt_exist[len_prompt] = True
 
@@ -143,11 +142,12 @@ class Query:
             self._fill_missing_idx(prefill_idx[idx_ii], missing=-1)
         
         # fill in missing rows
-        row_idx_arr = prompt_exist * np.arange(self.max_prompt_len+1)
+        row_idx_arr = prompt_exist * np.arange(self.max_prefill_prompt_len+1)
         self._fill_missing_idx(row_idx_arr, missing=0)
 
         missing_row_idx_arr = np.where(~prompt_exist)[0]
         prefill_idx[missing_row_idx_arr] = prefill_idx[row_idx_arr[missing_row_idx_arr]]
+        print("prefill complete")
 
         return prefill_idx
 
@@ -158,9 +158,9 @@ class Query:
         self.query_time = self.schedule.at[self.query_id, 'Timestamp'].item()
 
         sampled_prompt_len = self.schedule.at[self.query_id, 'Request tokens'].item()
-        sampled_prompt_len = min(sampled_prompt_len, self.max_prompt_len)
+        sampled_prompt_len = min(sampled_prompt_len, self.max_prefill_prompt_len)
         sampled_output_len = self.schedule.at[self.query_id, 'Response tokens'].item()
-        sampled_output_len = min(sampled_output_len, self.max_gen_len)
+        sampled_output_len = min(sampled_output_len, self.max_prefill_gen_len)
 
         sampled = self.inputs[self.prefill_idx[sampled_prompt_len, sampled_output_len]]
 
@@ -228,11 +228,9 @@ class TraceConfig(aiohttp.TraceConfig):
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
     def __init__(self, data: list, schedule: pd.DataFrame, config: dict, logger: MetricCollector):
-        self.queries = Query(inputs=data, schedule=schedule)
+        self.queries = Query(inputs=data, schedule=schedule, max_prefill_prompt_len=config['max_prefill_prompt_len'], max_prefill_gen_len=config['max_prefill_gen_len'])
         self.config = config
         self.logger = logger
-
-        print(self.queries.schedule)
 
     async def inference_call(self, session, prompt, sleep_time, query_id):
         # Single inference call
@@ -246,7 +244,7 @@ class TrafficGenerator:
             ],
             "temperature": self.config['temperature'],
             "max_tokens": self.config['max_tokens'],
-            "stream": STREAM
+            "stream": True
         }
         url = self.config['url']
         trace_request_ctx = {'query_id':query_id, 'logger':self.logger}
@@ -298,14 +296,12 @@ class TrafficGenerator:
 
 
 
-MAX_PROMPT_LEN = 1024
-MAX_GEN_LEN = 1024
-STREAM = True
-
 config = {
     'trace_path': '../data/trace1.csv',
     'data_path': '../data/conversations.json',
     'max_trace': 1000,
+    'max_prefill_prompt_len': 10000,
+    'max_prefill_gen_len': 10000,
     # 'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
     'url': 'http://192.168.1.100:8000/v1/chat/completions',
     # 'no_proxy': '10.215.130.20',
