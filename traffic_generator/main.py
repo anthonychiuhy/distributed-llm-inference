@@ -50,7 +50,7 @@ class Scheduler:
     def __init__(self, config=None):
         self.config = config
 
-    def get_schedule_from_trace(self, trace_path: str, max_trace: int) -> pd.DataFrame:
+    def get_schedule_from_trace(self, trace_path: str, max_trace: int = None) -> pd.DataFrame:
         return pd.read_csv(
             trace_path,
             nrows=max_trace,
@@ -80,7 +80,7 @@ class Scheduler:
         return pd.concat(dfs).reset_index(drop=True)
 
 class Query:
-    def __init__(self, inputs: list, schedule: pd.DataFrame, max_prefill_prompt_len: int = 5000, max_prefill_gen_len: int = 5000):
+    def __init__(self, inputs: list, schedule: pd.DataFrame, max_prefill_prompt_len: int = 10000, max_prefill_gen_len: int = 10000):
         self.inputs = inputs
         self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
         self.query_id = -1
@@ -214,16 +214,11 @@ class TraceConfig(aiohttp.TraceConfig):
     
     async def on_request_exception_callback(self, session, ctx, params):
         # request exception raised
+        logger = ctx.trace_request_ctx['logger']
         query_id = ctx.trace_request_ctx['query_id']
         logger.metrics[query_id]['response_headers_received_time'] = None
 
         print(f"[ERROR] ID: {query_id}, Request Exception")
-
-# sending token rate  = (number of tokens sent / ackknowledge time)
-# time to first token
-# check queue is on the server side, need to check acknowledge time from server.
-# 
-
 
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
@@ -297,9 +292,10 @@ class TrafficGenerator:
 
 
 config = {
-    'trace_path': '../data/trace1.csv',
-    'data_path': '../data/conversations.json',
-    'max_trace': 1000,
+    'trace_path': 'data/trace1.csv',
+    'data_path': 'data/conversations.json',
+    'log_path': 'logs/log.json',
+    'max_trace': None,
     'max_prefill_prompt_len': 10000,
     'max_prefill_gen_len': 10000,
     # 'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
@@ -309,7 +305,6 @@ config = {
     'temperature': 0.7,
     'max_tokens': 8192,
     # 'save_log': False,
-    'log_path': '../logs/log.json'
 }
 
 if __name__ == "__main__":
