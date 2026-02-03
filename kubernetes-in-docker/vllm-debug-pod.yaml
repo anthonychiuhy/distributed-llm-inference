@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-debug
+spec:
+  containers:
+  - name: vllm-debug
+    image: vllm/vllm-openai:v0.14.1
+    command: ["/bin/bash", "-c"]
+    # args: ["python3 -c 'import torch; print(torch.version.cuda); print(torch.cuda.is_available())'"]
+    args: ["echo $CUDA_VERSION; nvidia-smi; python3 -c 'import torch; print(torch.version.cuda)'"]
+    ports:
+    - containerPort: 8000
+    resources:
+      limits:
+        nvidia.com/gpu: 1 # requesting 1 GPU

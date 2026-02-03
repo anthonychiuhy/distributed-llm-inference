@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service # dns name other pods use to connect
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+  # The label selector should match the deployment labels & it is useful for prefix caching feature
+  type: ClusterIP

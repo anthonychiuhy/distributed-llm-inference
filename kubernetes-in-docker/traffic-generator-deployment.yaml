@@ -1,0 +1,23 @@
+# traffic-generator-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+    spec:
+      containers:
+        - name: traffic-generator
+          image: anthonychiuhy/traffic_generator:latest
+          env:
+           - name: "IP_ADDR"
+             value: "vllm-service"
+          ports:
+            - containerPort: 8080

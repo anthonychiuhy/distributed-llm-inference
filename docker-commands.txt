@@ -1,0 +1,7 @@
+docker run --runtime nvidia --gpus all -v ~/.cache/huggingface:/root/.cache/huggingface -p 8000:8000 --ipc=host vllm/vllm-openai:latest --model google/gemma-3-1b-it --gpu-memory-utilization 0.6
+
+docker run -p 8080:8080 -e IP_ADDR="192.168.1.100" traffic_generator
+
+docker run -p 9090:9090 -v /kubernetes-in-docker/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+
+docker run -p 3000:3000 grafana/grafana
