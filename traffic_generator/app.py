@@ -8,7 +8,7 @@ app = FastAPI()
 
 IP_ADDR = os.environ['IP_ADDR']
 config = {
-    'trace_path': 'data/trace1.csv',
+    'trace_path': 'schedules/trace1.csv',
     'data_path': 'data/conversations.json',
     'log_path': 'logs/log.json',
     'max_prefill_prompt_len': 10000,

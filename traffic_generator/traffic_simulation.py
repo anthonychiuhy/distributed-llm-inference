@@ -1,6 +1,9 @@
 import numpy as np
 
 class TrafficLoad:
+    """
+    Defines the Traffic Load Function.
+    """
     def __init__(self, alpha_0, alpha_s, alpha_r, alpha_g, t_s, t_r, t_g, tau_r, sigma):
         assert alpha_0 >= 0
         assert alpha_s >= 0
