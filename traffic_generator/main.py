@@ -1,11 +1,11 @@
-import os
 from time import perf_counter
 import json
-# import argparse
 import asyncio
 import aiohttp
 import numpy as np
 import pandas as pd
+
+from .traffic_simulation import TrafficLoad, simulate_nonhomogeneous_poisson
 
 
 class SteadyUser:
@@ -34,22 +34,16 @@ class BurstUser:
         return [self.time] * self.n_req
 
 class DataLoader:
-    def __init__(self, config=None):
-        self.config = config
-
     @staticmethod
     def load_json_from_path(file_path: str):
         with open(file_path, "r") as f:
             return json.load(f)
     
-    def get_data_from_path(self, data_path: str) -> list[tuple]:
+    def get_data_from_path(self, data_path: str) -> list[dict]:
         data = self.load_json_from_path(data_path)
-        return [(d["prompt"], d["len_prompt"], d["len_output"], d['output']) for d in data.values()]
+        return list(data.values())
 
 class Scheduler:
-    def __init__(self, config=None):
-        self.config = config
-
     def get_schedule_from_trace(self, trace_path: str, max_trace: int = None) -> pd.DataFrame:
         return pd.read_csv(
             trace_path,
@@ -78,9 +72,27 @@ class Scheduler:
             ))
 
         return pd.concat(dfs).reset_index(drop=True)
+    
+    def get_schedule_from_traffic_load_function(self, traffic_load_func: TrafficLoad, t_end: float, data: list[dict], seed=None, save_path=None) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        print("Simulation start")
+        times = simulate_nonhomogeneous_poisson(traffic_load_func, t_end, rng=rng)
+        print("Simulation complete")
+        n = len(times)
+        idx = rng.choice(len(data), n, replace=True)
+        schedule = pd.DataFrame(
+            {
+                'Timestamp': times,
+                'Request tokens': [data[i]['len_prompt'] for i in idx],
+                'Response tokens': [data[i]['len_output'] for i in idx]
+            }
+        )
+        if save_path:
+            schedule.to_csv(save_path, index=False)
+        return schedule
 
 class Query:
-    def __init__(self, inputs: list, schedule: pd.DataFrame, max_prefill_prompt_len: int = 10000, max_prefill_gen_len: int = 10000):
+    def __init__(self, inputs: list[dict], schedule: pd.DataFrame, max_prefill_prompt_len: int = 10000, max_prefill_gen_len: int = 10000):
         self.inputs = inputs
         self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
         self.query_id = -1
@@ -131,8 +143,8 @@ class Query:
         print("prefill start")
         # prefill record
         for idx, data in enumerate(self.inputs):
-            len_prompt = data[1]
-            len_output = data[2]
+            len_prompt = data['len_prompt']
+            len_output = data['len_output']
             if len_prompt <= self.max_prefill_prompt_len and len_output <= self.max_prefill_gen_len:
                 prefill_idx[len_prompt, len_output] = idx
                 prompt_exist[len_prompt] = True
@@ -165,9 +177,9 @@ class Query:
         sampled = self.inputs[self.prefill_idx[sampled_prompt_len, sampled_output_len]]
 
         return [
-            sampled[0], # prompt
-            sampled[1], # prompt input length
-            sampled[2], # prompr output length
+            sampled['prompt'], # prompt
+            sampled['len_prompt'], # prompt input length
+            sampled['len_output'], # prompt output length
             self.query_id,
             self.query_time
         ]
@@ -222,7 +234,7 @@ class TraceConfig(aiohttp.TraceConfig):
 
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
-    def __init__(self, data: list, schedule: pd.DataFrame, config: dict, logger: MetricCollector):
+    def __init__(self, data: list[dict], schedule: pd.DataFrame, config: dict, logger: MetricCollector):
         self.queries = Query(inputs=data, schedule=schedule, max_prefill_prompt_len=config['max_prefill_prompt_len'], max_prefill_gen_len=config['max_prefill_gen_len'])
         self.config = config
         self.logger = logger
@@ -292,15 +304,14 @@ class TrafficGenerator:
 
 
 config = {
-    'trace_path': 'data/trace1.csv',
-    'data_path': 'data/conversations.json',
+    'trace_path': 'schedules/trace1.csv',
+    'data_path': 'data/single_prompt.json',
     'log_path': 'logs/log.json',
     'max_trace': None,
     'max_prefill_prompt_len': 10000,
     'max_prefill_gen_len': 10000,
     # 'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
     'url': 'http://192.168.1.100:8000/v1/chat/completions',
-    # 'no_proxy': '10.215.130.20',
     'model': 'google/gemma-3-1b-it',
     'temperature': 0.7,
     'max_tokens': 8192,
@@ -308,24 +319,11 @@ config = {
 }
 
 if __name__ == "__main__":
-    # os.environ["NO_PROXY"] = config['no_proxy']
-
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
-
     schedule = Scheduler().get_schedule_from_trace(trace_path=config['trace_path'], max_trace=config['max_trace'])
-
     logger = MetricCollector()
-
-    # user1 = SteadyUser(name='u1', req_freq=1.0, duration=10.0, delay_start=0.0)
-    # user2 = SteadyUser(name='u2', req_freq=1.0, duration=10.0, delay_start=0.3)
-    # user3 = SteadyUser(name='u3', req_freq=1.0, duration=10.0, delay_start=0.6)
-    # user4 = BurstUser(name='u4', n_req=5, time=5.5)
-    # user5 = BurstUser(name='u5', n_req=5, time=2.5)
-    # users = [user1, user2, user3, user4, user5]
-    # schedule = Scheduler().get_schedule_from_users(users=users)
 
     generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
     generator.start_profile()
 
-    # print(logger.metrics)
     logger.save(path=config['log_path'])
