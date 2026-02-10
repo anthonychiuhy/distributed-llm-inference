@@ -1,3 +1,4 @@
 **/__pycache__
 resources
 .venv
+.DS_Store
