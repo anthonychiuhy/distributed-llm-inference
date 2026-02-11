@@ -17,5 +17,5 @@ RUN mkdir logs
 # code
 COPY traffic_generator/ /app/traffic_generator/
 
-# # Run the application.
+# Run the application.
 CMD ["/app/.venv/bin/fastapi", "run", "traffic_generator/app.py", "--port", "8080", "--host", "0.0.0.0"]
