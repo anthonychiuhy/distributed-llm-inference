@@ -11,7 +11,7 @@ RUN uv sync --frozen --no-cache --no-dev
 # data
 COPY data/conversations.json /app/data/
 # schedule
-COPY schedules/trace1.csv /app/schedules/
+COPY schedules/schedule1.csv /app/schedules/
 # logs
 RUN mkdir logs
 # code
