@@ -10,6 +10,7 @@ class TrafficLoad:
         assert alpha_r >= 0
         assert alpha_g >= 0
         assert tau_r > 0 # 1/tau_r must be a positive slope
+        assert sigma > 0 # sigma must be positive and non zero
 
         self.alpha_0 = alpha_0
         self.alpha_s = alpha_s
@@ -35,6 +36,9 @@ class TrafficLoad:
 
     def __call__(self, t):
         return self.alpha_0 + self.alpha_s * self.step(t) + self.alpha_r * self.ramp(t) + self.alpha_g * self.gaussian(t)
+    
+    def __repr__(self):
+        return f"L(t)={self.alpha_0}+{self.alpha_s}step(t-{self.t_s})+{self.alpha_r}ramp(t-{self.t_r};{self.tau_r})+{self.alpha_g}gaussian(t-{self.t_g};{self.sigma})"
 
 def simulate_nonhomogeneous_poisson(rate, t_end, rng=None):
     """
