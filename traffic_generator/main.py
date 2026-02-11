@@ -44,10 +44,9 @@ class DataLoader:
         return list(data.values())
 
 class Scheduler:
-    def get_schedule_from_trace(self, trace_path: str, max_trace: int = None) -> pd.DataFrame:
+    def get_schedule_from_path(self, schedule_path: str) -> pd.DataFrame:
         return pd.read_csv(
-            trace_path,
-            nrows=max_trace,
+            schedule_path,
             dtype={
                 "Timestamp": float,
                 "Request tokens": int,
@@ -92,13 +91,13 @@ class Scheduler:
         return schedule
 
 class Query:
-    def __init__(self, inputs: list[dict], schedule: pd.DataFrame, max_prefill_prompt_len: int = 10000, max_prefill_gen_len: int = 10000):
+    def __init__(self, inputs: list[dict], schedule: pd.DataFrame):
         self.inputs = inputs
         self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
         self.query_id = -1
         self.query_time = 0
-        self.max_prefill_prompt_len = max_prefill_prompt_len
-        self.max_prefill_gen_len = max_prefill_gen_len
+        self.max_prefill_prompt_len = max(inputs, key=lambda x: x['len_prompt'])['len_prompt']
+        self.max_prefill_gen_len = max(inputs, key=lambda x: x['len_output'])['len_output']
         self.prefill_idx = self.get_prefill_idx()
 
     @staticmethod
@@ -137,7 +136,7 @@ class Query:
                 arr[i] = arr[i + dist_to_right[i]]
 
     def get_prefill_idx(self):
-        prefill_idx = np.ones((self.max_prefill_prompt_len+1, self.max_prefill_gen_len+1), dtype=int) * (-1)
+        prefill_idx = np.ones((self.max_prefill_prompt_len+1, self.max_prefill_gen_len+1), dtype=np.int16) * (-1) # int16 supports prompt and output length up to 32767
         prompt_exist = np.zeros(self.max_prefill_prompt_len+1, dtype=bool)
 
         print("prefill start")
@@ -145,9 +144,8 @@ class Query:
         for idx, data in enumerate(self.inputs):
             len_prompt = data['len_prompt']
             len_output = data['len_output']
-            if len_prompt <= self.max_prefill_prompt_len and len_output <= self.max_prefill_gen_len:
-                prefill_idx[len_prompt, len_output] = idx
-                prompt_exist[len_prompt] = True
+            prefill_idx[len_prompt, len_output] = idx
+            prompt_exist[len_prompt] = True
 
         # fill in missing row values
         for idx_ii in np.where(prompt_exist)[0]:
@@ -164,7 +162,7 @@ class Query:
         return prefill_idx
 
     def get_query(self):
-        # Use the trace
+        # Get next query according to schedule
         self.query_id += 1
 
         self.query_time = self.schedule.at[self.query_id, 'Timestamp'].item()
@@ -235,7 +233,7 @@ class TraceConfig(aiohttp.TraceConfig):
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
     def __init__(self, data: list[dict], schedule: pd.DataFrame, config: dict, logger: MetricCollector):
-        self.queries = Query(inputs=data, schedule=schedule, max_prefill_prompt_len=config['max_prefill_prompt_len'], max_prefill_gen_len=config['max_prefill_gen_len'])
+        self.queries = Query(inputs=data, schedule=schedule)
         self.config = config
         self.logger = logger
 
@@ -304,23 +302,18 @@ class TrafficGenerator:
 
 
 config = {
-    'trace_path': 'schedules/trace1.csv',
-    'data_path': 'data/single_prompt.json',
-    'log_path': 'logs/log.json',
-    'max_trace': None,
-    'max_prefill_prompt_len': 10000,
-    'max_prefill_gen_len': 10000,
-    # 'url': 'http://10.215.130.20:11434/api/generate', # OR 172.25.149.93
+    'schedule_path': 'schedules/schedule1.csv',
+    'data_path': 'data/conversations.json',
+    'log_path': 'logs/schedule1.json',
     'url': 'http://192.168.1.100:8000/v1/chat/completions',
     'model': 'google/gemma-3-1b-it',
     'temperature': 0.7,
     'max_tokens': 8192,
-    # 'save_log': False,
 }
 
 if __name__ == "__main__":
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
-    schedule = Scheduler().get_schedule_from_trace(trace_path=config['trace_path'], max_trace=config['max_trace'])
+    schedule = Scheduler().get_schedule_from_path(schedule_path=config['schedule_path'])
     logger = MetricCollector()
 
     generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)

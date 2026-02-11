@@ -8,15 +8,13 @@ from .traffic_simulation import TrafficLoad
 
 IP_ADDR = os.environ['IP_ADDR']
 
-config = {
-    'data_path': 'data/conversations.json',
-    'max_prefill_prompt_len': 10000,
-    'max_prefill_gen_len': 10000,
+generator_config = {
     'url': f'http://{IP_ADDR}:8000/v1/chat/completions',
     'model': 'google/gemma-3-1b-it',
     'temperature': 0.7,
     'max_tokens': 8192
 }
+data = DataLoader().get_data_from_path(data_path='data/conversations.json')
 
 
 app = FastAPI()
@@ -35,15 +33,14 @@ class Params(BaseModel):
 
 @app.get("/")
 def send_default_traffic():
-    print(f"Send traffic to {config['url']}")
+    print(f"Send traffic to {generator_config['url']}")
 
-    data = DataLoader().get_data_from_path(data_path=config['data_path'])
-    schedule = Scheduler().get_schedule_from_trace(trace_path='schedules/trace1.csv')
+    schedule = Scheduler().get_schedule_from_path(schedule_path='schedules/schedule1.csv')
     logger = MetricCollector()
-    generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
+    generator = TrafficGenerator(data=data, schedule=schedule, config=generator_config, logger=logger)
     generator.start_profile()
 
-    logger.save(path='logs/trace1.json')
+    logger.save(path='logs/schedule1.json')
 
     return "traffic sent completed"
 
@@ -60,23 +57,19 @@ def send_traffic_load_function(params: Params):
         tau_r=params.tau_r,
         sigma=params.sigma
     )
-    print(f"Send traffic to {config['url']}")
+    print(f"Send traffic to {generator_config['url']}")
     print(f"Using traffic load function {traffic_load_func}")
 
-    data = DataLoader().get_data_from_path(data_path=config['data_path'])
-
     file_prefix = f"{repr(traffic_load_func)};t=[0,{params.duration}]"
-    save_path = f"schedules/{file_prefix}.csv"
+    schedule_path = f"schedules/{file_prefix}.csv"
 
-    if os.path.isfile(save_path):
-        schedule = Scheduler().get_schedule_from_trace(trace_path=save_path)
+    if os.path.isfile(schedule_path):
+        schedule = Scheduler().get_schedule_from_path(schedule_path=schedule_path)
     else:
-        schedule = Scheduler().get_schedule_from_traffic_load_function(traffic_load_func, params.duration, data, save_path=save_path)
+        schedule = Scheduler().get_schedule_from_traffic_load_function(traffic_load_func, params.duration, data, save_path=schedule_path)
     
     logger = MetricCollector()
-    generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
-
-    
+    generator = TrafficGenerator(data=data, schedule=schedule, config=generator_config, logger=logger)
     generator.start_profile()
 
     logger.save(path=f'logs/{file_prefix}.json')
