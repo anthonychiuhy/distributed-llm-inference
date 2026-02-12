@@ -91,11 +91,8 @@ class Scheduler:
         return schedule
 
 class Query:
-    def __init__(self, inputs: list[dict], schedule: pd.DataFrame):
+    def __init__(self, inputs: list[dict]):
         self.inputs = inputs
-        self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
-        self.query_id = -1
-        self.query_time = 0
         self.max_prefill_prompt_len = max(inputs, key=lambda x: x['len_prompt'])['len_prompt']
         self.max_prefill_gen_len = max(inputs, key=lambda x: x['len_output'])['len_output']
         self.prefill_idx = self.get_prefill_idx()
@@ -182,7 +179,8 @@ class Query:
             self.query_time
         ]
     
-    def reset(self):
+    def reset_schedule(self, schedule: pd.DataFrame):
+        self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
         self.query_id = -1
         self.query_time = 0
 
@@ -232,12 +230,11 @@ class TraceConfig(aiohttp.TraceConfig):
 
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
-    def __init__(self, data: list[dict], schedule: pd.DataFrame, config: dict, logger: MetricCollector):
-        self.queries = Query(inputs=data, schedule=schedule)
+    def __init__(self, data: list[dict], config: dict):
+        self.queries = Query(data)
         self.config = config
-        self.logger = logger
 
-    async def inference_call(self, session, prompt, sleep_time, query_id):
+    async def _inference_call(self, session, prompt, sleep_time, query_id):
         # Single inference call
         payload = {
             "model": self.config['model'],
@@ -282,22 +279,23 @@ class TrafficGenerator:
         self.logger.metrics[query_id]['scheduled_start_time'] = sleep_time
         self.logger.metrics[query_id]['success'] = success
 
-    async def issue_queries(self):
+    async def _issue_queries(self):
         # Multiple concurrent inference call
         async with aiohttp.ClientSession(trace_configs=[self.logger.trace_config]) as session:
             task_list = []
             for _ in range(len(self.queries)):
                 prompt, in_num, out_num, query_id, sleep_time = self.queries.get_query()
-                task_list.append(self.inference_call(session, prompt, sleep_time, query_id))
+                task_list.append(self._inference_call(session, prompt, sleep_time, query_id))
                 
                 self.logger.metrics[query_id] = {} # initialise
                 self.logger.metrics[query_id]['number_of_input_tokens'] = in_num
             self.logger.session_start_timestamp = perf_counter()
             await asyncio.gather(*task_list)
 
-    def start_profile(self):
-        self.queries.reset()
-        asyncio.run(self.issue_queries())
+    def start_profile(self, schedule: pd.DataFrame, logger: MetricCollector):
+        self.queries.reset_schedule(schedule)
+        self.logger = logger
+        asyncio.run(self._issue_queries())
 
 
 
@@ -314,9 +312,9 @@ config = {
 if __name__ == "__main__":
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
     schedule = Scheduler().get_schedule_from_path(schedule_path=config['schedule_path'])
+    generator = TrafficGenerator(data=data, config=config)
     logger = MetricCollector()
 
-    generator = TrafficGenerator(data=data, schedule=schedule, config=config, logger=logger)
-    generator.start_profile()
+    generator.start_profile(schedule, logger)
 
     logger.save(path=config['log_path'])

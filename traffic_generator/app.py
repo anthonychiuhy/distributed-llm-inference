@@ -15,6 +15,7 @@ generator_config = {
     'max_tokens': 8192
 }
 data = DataLoader().get_data_from_path(data_path='data/conversations.json')
+generator = TrafficGenerator(data=data, config=generator_config)
 
 
 app = FastAPI()
@@ -37,8 +38,7 @@ def send_default_traffic():
 
     schedule = Scheduler().get_schedule_from_path(schedule_path='schedules/schedule1.csv')
     logger = MetricCollector()
-    generator = TrafficGenerator(data=data, schedule=schedule, config=generator_config, logger=logger)
-    generator.start_profile()
+    generator.start_profile(schedule, logger)
 
     logger.save(path='logs/schedule1.json')
 
@@ -69,8 +69,7 @@ def send_traffic_load_function(params: Params):
         schedule = Scheduler().get_schedule_from_traffic_load_function(traffic_load_func, params.duration, data, save_path=schedule_path)
     
     logger = MetricCollector()
-    generator = TrafficGenerator(data=data, schedule=schedule, config=generator_config, logger=logger)
-    generator.start_profile()
+    generator.start_profile(schedule, logger)
 
     logger.save(path=f'logs/{file_prefix}.json')
 
