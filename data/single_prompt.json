@@ -1,8 +1,0 @@
-{
-    "0": {
-        "prompt": "I'm beginner in cyber security. In cyber security perspective, is binding a service to a host on 0.0.0.0 in production is a bad idea? Or is it actually ok to bind it to 0.0.0.0 but only with other network setups to protect the host?",
-        "len_prompt": 140,
-        "output": "",
-        "len_output": 0
-    }
-}

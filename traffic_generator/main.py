@@ -90,11 +90,57 @@ class Scheduler:
             schedule.to_csv(save_path, index=False)
         return schedule
 
-class Query:
+class Query_1d:
     def __init__(self, inputs: list[dict]):
         self.inputs = inputs
         self.max_prefill_prompt_len = max(inputs, key=lambda x: x['len_prompt'])['len_prompt']
-        self.max_prefill_gen_len = max(inputs, key=lambda x: x['len_output'])['len_output']
+        self.prefill_idx = self.get_prefill_idx()
+
+    def get_prefill_idx(self):
+        prefill_idx = np.ones(self.max_prefill_prompt_len+1, dtype=int) * (-1) # int16 supports data size up to 32767
+        
+        for idx, data in enumerate(self.inputs):
+            len_prompt = data['len_prompt']
+            prefill_idx[len_prompt] = idx
+
+        # fill in missing row values
+        Query._fill_missing_idx(prefill_idx, missing=-1)
+        print("prefill done")
+
+        return prefill_idx
+    
+    def get_query(self):
+        # Get next query according to schedule
+        self.query_id += 1
+
+        self.query_time = self.schedule.at[self.query_id, 'Timestamp'].item()
+
+        sampled_prompt_len = self.schedule.at[self.query_id, 'Request tokens'].item()
+        sampled_prompt_len = min(sampled_prompt_len, self.max_prefill_prompt_len)
+
+        sampled = self.inputs[self.prefill_idx[sampled_prompt_len]]
+
+        return [
+            sampled['prompt'], # prompt
+            sampled['len_prompt'], # prompt input length
+            sampled['len_output'], # prompt output length
+            self.query_id,
+            self.query_time
+        ]
+    
+    def reset_schedule(self, schedule: pd.DataFrame):
+        self.schedule = schedule.sort_values(by='Timestamp').reset_index(drop=True)
+        self.query_id = -1
+        self.query_time = 0
+
+    def __len__(self):
+        return len(self.schedule)
+
+class Query:
+    def __init__(self, inputs: list[dict], max_prefill_prompt_len=None, max_prefill_gen_len=None):
+        self.inputs = inputs
+        self.max_prefill_prompt_len = max_prefill_prompt_len if max_prefill_prompt_len else max(inputs, key=lambda x: x['len_prompt'])['len_prompt']
+        self.max_prefill_gen_len = max_prefill_gen_len if max_prefill_gen_len else max(inputs, key=lambda x: x['len_output'])['len_output']
         self.prefill_idx = self.get_prefill_idx()
 
     @staticmethod
@@ -133,7 +179,7 @@ class Query:
                 arr[i] = arr[i + dist_to_right[i]]
 
     def get_prefill_idx(self):
-        prefill_idx = np.ones((self.max_prefill_prompt_len+1, self.max_prefill_gen_len+1), dtype=np.int16) * (-1) # int16 supports prompt and output length up to 32767
+        prefill_idx = np.ones((self.max_prefill_prompt_len+1, self.max_prefill_gen_len+1), dtype=np.int16) * (-1) # int16 supports data size up to 32767
         prompt_exist = np.zeros(self.max_prefill_prompt_len+1, dtype=bool)
 
         print("prefill start")
@@ -141,8 +187,9 @@ class Query:
         for idx, data in enumerate(self.inputs):
             len_prompt = data['len_prompt']
             len_output = data['len_output']
-            prefill_idx[len_prompt, len_output] = idx
-            prompt_exist[len_prompt] = True
+            if len_prompt <= self.max_prefill_prompt_len and len_output <= self.max_prefill_gen_len:
+                prefill_idx[len_prompt, len_output] = idx
+                prompt_exist[len_prompt] = True
 
         # fill in missing row values
         for idx_ii in np.where(prompt_exist)[0]:
@@ -231,7 +278,7 @@ class TraceConfig(aiohttp.TraceConfig):
 class TrafficGenerator:
     """Generates LLM inference traffic and send it to inference endpoint"""
     def __init__(self, data: list[dict], config: dict):
-        self.queries = Query(data)
+        self.queries = Query_1d(data)
         self.config = config
 
     async def _inference_call(self, session, prompt, sleep_time, query_id):
@@ -301,7 +348,7 @@ class TrafficGenerator:
 
 config = {
     'schedule_path': 'schedules/schedule1.csv',
-    'data_path': 'data/conversations.json',
+    'data_path': 'data/ShareGPT_V3_processed.json',
     'log_path': 'logs/schedule1.json',
     'url': 'http://192.168.1.100:8000/v1/chat/completions',
     'model': 'google/gemma-3-1b-it',
@@ -311,8 +358,11 @@ config = {
 
 if __name__ == "__main__":
     data = DataLoader().get_data_from_path(data_path=config['data_path'])
+    print("data loaded")
     schedule = Scheduler().get_schedule_from_path(schedule_path=config['schedule_path'])
+    print("schedule loaded")
     generator = TrafficGenerator(data=data, config=config)
+    print("generator")
     logger = MetricCollector()
 
     generator.start_profile(schedule, logger)
